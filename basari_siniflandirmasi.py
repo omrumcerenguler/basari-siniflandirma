@@ -1,14 +1,20 @@
-from dotenv import load_dotenv
-import os
-import pyodbc
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-# Modelleme için gerekli kütüphaneler (rondom forest kullanacağız)
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix
+# Bu proje, birimlerin stratejik planlama etkinliğine göre başarı düzeyini sınıflandırmak için Random Forest modeli kullanır.
 from sklearn.utils import resample
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+import pyodbc
+import os
+from dotenv import load_dotenv
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning,
+                        message=".*pandas only supports SQLAlchemy connectable.*")
+pd.set_option("display.max_columns", None)
+
+# Modelleme için gerekli kütüphaneler (rondom forest kullanacağız)
 
 # Veritabanıyla bağlantı kuruluyor
 load_dotenv()
@@ -40,6 +46,13 @@ planveri = pd.read_sql("SELECT * FROM dbo.BirimSPlanVeri", conn)
 planveri["Yoksis_Id"] = planveri["Yoksis_Id"].astype(str).str.strip()
 planveri["Yoksis_Id"] = planveri["Yoksis_Id"].astype(str)
 
+print("\n=================== TABLO BOYUTLARI ===================")
+print("Birim:", birim.shape)
+print("BirimTur:", birimtur.shape)
+print("BirimRaporDosya:", birimrapor.shape)
+print("PlanVeri:", planveri.shape)
+print(birim.isna().sum())
+
 # 1. Birim bilgilerini sadeleştiri birim tablosunda birsürü column var, sadece gerekli olanları alıyoruz
 birim = birim[["Yoksis_Id", "Adi", "Birim_Tur_Id"]].rename(columns={
     "Yoksis_Id": "Birim_Id",
@@ -48,75 +61,119 @@ birim = birim[["Yoksis_Id", "Adi", "Birim_Tur_Id"]].rename(columns={
 
 # 2. Birim türünü ekle
 # Birim türü tablosunu birim tablosuna ekle
-birimtur = birimtur.rename(columns={"Adi": "Birim_Tur_Adi"}) 
-birim = birim.merge(birimtur, on="Birim_Tur_Id", how="left", validate="many_to_one")
+birimtur = birimtur.rename(columns={"Adi": "Birim_Tur_Adi"})
+birim = birim.merge(birimtur, on="Birim_Tur_Id",
+                    how="left", validate="many_to_one")
 
+print("\n" + "-"*60)
 print("Eşleşmeyen Birim_Tur_Id değerleri:")
 print(birim[birim["Birim_Tur_Adi"].isna()]["Birim_Tur_Id"].unique())
 
 # 3. Rapor sayısı (Yoksis_Id üzerinden)
 # ID tiplerini eşleştirmek için hepsini string'e çevir
 # Rapor sayısını hesapla
-rapor_sayilari = birimrapor.groupby("Yoksis_Id").size().reset_index(name="Rapor_Sayisi")
-rapor_sayilari["Yoksis_Id"] = rapor_sayilari["Yoksis_Id"].astype(str).str.strip()
+rapor_sayilari = birimrapor.groupby(
+    "Yoksis_Id").size().reset_index(name="Rapor_Sayisi")
+rapor_sayilari["Yoksis_Id"] = rapor_sayilari["Yoksis_Id"].astype(
+    str).str.strip()
 birim["Birim_Id"] = birim["Birim_Id"].astype(str).str.strip()
-birim = pd.merge(birim, rapor_sayilari, left_on="Birim_Id", right_on="Yoksis_Id", how="left", validate="many_to_one")
+birim = pd.merge(birim, rapor_sayilari, left_on="Birim_Id",
+                 right_on="Yoksis_Id", how="left", validate="many_to_one")
 birim["Rapor_Sayisi"] = birim["Rapor_Sayisi"].fillna(0).astype(int)
 
 # 4. Stratejik plan hedef sayısı ve gerçekleşen sayısı
-hedef_sayisi = planveri.groupby("Yoksis_Id").size().reset_index(name="Hedef_Sayisi")
+print("\n" + "-"*60)
+print(planveri["MantiksalDeger"].value_counts())
+hedef_sayisi = planveri.groupby(
+    "Yoksis_Id").size().reset_index(name="Hedef_Sayisi")
 hedef_sayisi["Yoksis_Id"] = hedef_sayisi["Yoksis_Id"].astype(str).str.strip()
-gerceklesen = planveri[planveri["MantiksalDeger"] == True].groupby("Yoksis_Id").size().reset_index(name="Gerceklesen_Hedef")
+gerceklesen = planveri[planveri["MantiksalDeger"] == True].groupby(
+    "Yoksis_Id").size().reset_index(name="Gerceklesen_Hedef")
 gerceklesen["Yoksis_Id"] = gerceklesen["Yoksis_Id"].astype(str).str.strip()
 
 birim["Birim_Id"] = birim["Birim_Id"].astype(str).str.strip()
-birim = birim.merge(hedef_sayisi, left_on="Birim_Id", right_on="Yoksis_Id", how="left")
-birim = birim.merge(gerceklesen, left_on="Birim_Id", right_on="Yoksis_Id", how="left")
+birim = birim.merge(hedef_sayisi, left_on="Birim_Id",
+                    right_on="Yoksis_Id", how="left")
+birim = birim.merge(gerceklesen, left_on="Birim_Id",
+                    right_on="Yoksis_Id", how="left")
 
 # Eksik değerleri 0 yap
 birim["Hedef_Sayisi"] = birim["Hedef_Sayisi"].fillna(0).astype(int)
 birim["Gerceklesen_Hedef"] = birim["Gerceklesen_Hedef"].fillna(0).astype(int)
 
-# Gerçekleşme oranı
-birim["Gerceklesme_Orani"] = (
-    birim["Gerceklesen_Hedef"] / birim["Hedef_Sayisi"].replace(0, pd.NA)
-) * 100
-birim["Gerceklesme_Orani"] = birim["Gerceklesme_Orani"].fillna(0)
+birim["Planlama_Etkinligi"] = birim.apply(
+    lambda row: row["Gerceklesen_Hedef"] / row["Hedef_Sayisi"] if row["Hedef_Sayisi"] > 0 else 0, axis=1)
+birim["Rapor_Basina_Hedef"] = birim.apply(
+    lambda row: row["Hedef_Sayisi"] / (row["Rapor_Sayisi"] + 1), axis=1)
 
-# Sonuçlardan örnek göster
-#print(birim[["Birim_Adi", "Birim_Tur_Adi", "Rapor_Sayisi", "Hedef_Sayisi", "Gerceklesen_Hedef", "Gerceklesme_Orani"]].head(10))
+birim = birim[birim["Hedef_Sayisi"] > 0]
 
-# 5. Etiket oluştur: Başarılı, Orta, Başarısız
-def etiketle(orani):
-    if orani >= 80:
+birim["Ortalama_Hedef_Gerceklesme"] = birim.apply(
+    lambda row: row["Gerceklesen_Hedef"] /
+    row["Rapor_Sayisi"] if row["Rapor_Sayisi"] > 0 else 0,
+    axis=1
+)
+
+
+# Eğer tüm başarı düzeyi tek sınıftan oluşuyorsa model eğitilemez
+
+
+def etiketle_alternatif(row):
+    if row["Planlama_Etkinligi"] >= 0.7:
         return "Başarılı"
-    elif orani >= 50:
+    elif row["Planlama_Etkinligi"] >= 0.3:
         return "Orta"
     else:
         return "Başarısız"
 
-birim["Basari_Duzeyi"] = birim["Gerceklesme_Orani"].apply(etiketle)
+birim["Basari_Duzeyi"] = birim.apply(etiketle_alternatif, axis=1)
+
+if birim["Basari_Duzeyi"].nunique() == 1:
+    print("UYARI: Veri setinde yalnızca '{}' sınıfı bulundu. Sınıflandırma için yeterli çeşitlilik yok.".format(
+        birim["Basari_Duzeyi"].unique()[0]))
+    print("Veri yetersiz olduğu için model eğitimi sonlandırıldı.")
+    birim.to_csv("birim_basari_siniflandirma_sonuclari.csv", index=False)
+    exit()
 
 # Sınıfları ayır
 df_basarisiz = birim[birim["Basari_Duzeyi"] == "Başarısız"]
 df_basarili = birim[birim["Basari_Duzeyi"] == "Başarılı"]
 df_orta = birim[birim["Basari_Duzeyi"] == "Orta"]
 
-# Azınlık sınıfları çoğalt (upsampling)
-df_basarili_up = pd.DataFrame()
-df_orta_up = pd.DataFrame()
+unique_classes = birim["Basari_Duzeyi"].unique()
 
-if not df_basarili.empty:
-    df_basarili_up = resample(df_basarili, replace=True, n_samples=len(df_basarisiz), random_state=42)
+if len(unique_classes) == 1:
+    print(
+        f"UYARI: Veri setinde yalnızca '{unique_classes[0]}' sınıfı bulundu. Sınıflandırma için yeterli çeşitlilik yok.")
+    print("Veri yetersiz olduğu için model eğitimi sonlandırıldı.")
+    birim.to_csv("birim_basari_siniflandirma_sonuclari.csv", index=False)
+    exit()
+elif len(unique_classes) == 2:
+    # İki sınıf varsa, az olanı çoğalt
+    class_counts = birim["Basari_Duzeyi"].value_counts()
+    majority_class = class_counts.idxmax()
+    minority_class = class_counts.idxmin()
 
-if not df_orta.empty:
-    df_orta_up = resample(df_orta, replace=True, n_samples=len(df_basarisiz), random_state=42) 
-    
-# Yeni dengelenmiş veri seti
-birim = pd.concat([df_basarisiz, df_basarili_up, df_orta_up])
+    df_majority = birim[birim["Basari_Duzeyi"] == majority_class]
+    df_minority = birim[birim["Basari_Duzeyi"] == minority_class]
+
+    df_minority_up = resample(
+        df_minority, replace=True, n_samples=len(df_majority), random_state=42)
+    birim = pd.concat([df_majority, df_minority_up])
+else:
+    # 3 sınıf varsa tüm sınıfları eşitle
+    max_count = max(len(df_basarisiz), len(df_basarili), len(df_orta))
+    df_basarisiz_up = resample(
+        df_basarisiz, replace=True, n_samples=max_count, random_state=42)
+    df_basarili_up = resample(
+        df_basarili, replace=True, n_samples=max_count, random_state=42)
+    df_orta_up = resample(df_orta, replace=True,
+                          n_samples=max_count, random_state=42)
+    birim = pd.concat([df_basarisiz_up, df_basarili_up, df_orta_up])
 
 # Son halini göster
-#print(birim[["Birim_Adi", "Gerceklesme_Orani", "Basari_Duzeyi"]].head(10))
+print("\n" + "-"*60)
+print(birim[["Birim_Adi", "Basari_Duzeyi"]].head(10))
 
 # RANDOM FOREST MODELİ İLE SINIFLANDIRMA
 
@@ -124,13 +181,21 @@ birim = pd.concat([df_basarisiz, df_basarili_up, df_orta_up])
 kategorik = pd.get_dummies(birim["Birim_Tur_Adi"], prefix="Tur")
 
 # Ana veriyle birleştir
-X = pd.concat([birim[["Rapor_Sayisi", "Hedef_Sayisi", "Gerceklesen_Hedef"]], kategorik], axis=1) 
-y = birim["Basari_Duzeyi"] # X, modelin girdi verisi; y, modelin tahmin edeceği etiketlerdir.
+X = pd.concat([
+    birim[[
+        "Rapor_Sayisi", "Hedef_Sayisi", "Gerceklesen_Hedef",
+        "Planlama_Etkinligi", "Rapor_Basina_Hedef", "Ortalama_Hedef_Gerceklesme"
+    ]],
+    kategorik
+], axis=1)
+# X, modelin girdi verisi; y, modelin tahmin edeceği etiketlerdir.
+y = birim["Basari_Duzeyi"]
 
 # Eğitim/test bölmesi
-X_train, X_test, y_train, y_test = train_test_split( 
-    X, y, test_size=0.3, random_state=42, stratify=y # %30 test verisi, %70 eğitim verisi. stratify=y → Etiket sınıflarının oransal dağılımını koruyarak bölme yapar
-)                                                   #(örnek: %60 başarılı, %30 orta, %10 başarısız → hem train hem test setinde bu oran korunur)
+X_train, X_test, y_train, y_test = train_test_split(
+    # %30 test verisi, %70 eğitim verisi. stratify=y → Etiket sınıflarının oransal dağılımını koruyarak bölme yapar
+    X, y, test_size=0.3, random_state=42, stratify=y
+)  # (örnek: %60 başarılı, %30 orta, %10 başarısız → hem train hem test setinde bu oran korunur)
 
 
 # Model oluştur
@@ -138,11 +203,16 @@ model = RandomForestClassifier(random_state=42)
 model.fit(X_train, y_train)
 
 # Tahmin yap
-y_pred = model.predict(X_test) #y_pred, test verisi için modelin tahmin ettiği etiketler
+# y_pred, test verisi için modelin tahmin ettiği etiketler
+y_pred = model.predict(X_test)
 
 # Değerlendirme
-#print("Classification Report:\n", classification_report(y_test, y_pred)) # modelin başarısını gösterir
-#print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred)) # modelin tahminlerinin doğruluğunu gösterir
+print("\n" + "-"*60)
+print("Classification Report:\n", classification_report(
+    y_test, y_pred))  # modelin başarısını gösterir
+print("\n" + "-"*60)
+# modelin tahminlerinin doğruluğunu gösterir
+print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
 
 # Karışıklık matrisi görselleştirme (confusion matrix)
 labels = ["Başarılı", "Orta", "Başarısız"]  # Sıralı ve tam etiket listesi
@@ -156,9 +226,10 @@ sns.heatmap(
 plt.xlabel("Tahmin Edilen")
 plt.ylabel("Gerçek Değer")
 plt.title("Başarı Sınıflandırması - Karışıklık Matrisi")
+print("\n" + "-"*60)
 plt.tight_layout()
-#plt.show()
-#Bu grafik sana şunu gösterir:
+plt.show()
+# Bu grafik sana şunu gösterir:
 # Model “Başarılı” etiketini kaç kez doğru tahmin etmiş?
 # “Orta” ya da “Başarısız” olanları karıştırmış mı?
 # En çok hangi sınıfta zorlanmış?
@@ -173,23 +244,65 @@ test_sonuclari["Tahmin"] = y_pred
 test_sonuclari.to_csv("model_tahmin_sonuclari.csv", index=False)
 
 # Sayısal sütunlar için genel istatistik
-#print(birim[["Rapor_Sayisi", "Hedef_Sayisi", "Gerceklesen_Hedef", "Gerceklesme_Orani"]].describe())
+print("\n" + "-"*60)
+print(birim[["Rapor_Sayisi", "Hedef_Sayisi", "Gerceklesen_Hedef"]].describe())
 
-# Korelasyon matrisi oluştur
-corr = birim[["Rapor_Sayisi", "Hedef_Sayisi", "Gerceklesen_Hedef", "Gerceklesme_Orani"]].corr() # Korelasyon, değişkenler arasındaki ilişkiyi gösterir. 1'e yakınsa pozitif ilişki, -1'e yakınsa negatif ilişki vardır. 0 ise ilişkisizlik anlamına gelir.
-                                                                                           #pozitif ilişki= biri artarsa diğeri de artar; negatif ilişki= biri artarsa diğeri azalır.
-# Korelasyon heatmap
-plt.figure(figsize=(8, 6))
-sns.heatmap(corr, annot=True, cmap="coolwarm", linewidths=0.5)
-plt.title("Sayısal Değişkenler Arası Korelasyon Matrisi")
-plt.tight_layout()
-#plt.show()
-
+print("\n" + "-"*60)
 print(kategorik.head())
 
-print(birimtur["Birim_Tur_Adi"].unique())
-
-print(birimtur.columns)
-print(birim["Birim_Tur_Id"].unique())
-print(birimtur["Birim_Tur_Id"].unique())
+print("\n" + "-"*60)
 print(birim["Birim_Tur_Adi"].value_counts())
+
+# === ÖZELLİK ÖNEMİ ANALİZİ ===
+importances = model.feature_importances_
+feature_names = X.columns
+feature_imp_series = pd.Series(
+    importances, index=feature_names).sort_values(ascending=False)
+
+plt.figure(figsize=(10, 6))
+sns.barplot(x=feature_imp_series.values, y=feature_imp_series.index,
+            hue=None, palette="viridis", legend=False)
+plt.title("Random Forest - Özellik Önem Düzeyleri")
+plt.xlabel("Önem Skoru")
+plt.ylabel("Özellikler")
+print("\n" + "-"*60)
+plt.tight_layout()
+plt.show()
+
+print("\n" + "-"*60)
+print("Özellik önemleri:", model.feature_importances_)
+
+print("\n" + "-"*60)
+print(birim[["Rapor_Sayisi", "Hedef_Sayisi",
+      "Gerceklesen_Hedef", "Basari_Duzeyi"]].head(20))
+
+print("\n" + "-"*60)
+print("Veri setindeki sınıf dağılımı:")
+print(birim["Basari_Duzeyi"].value_counts())
+print("\n" + "-"*60)
+print("\nSınıf dağılımı (oran olarak):")
+print(birim["Basari_Duzeyi"].value_counts(normalize=True))
+if birim["Basari_Duzeyi"].nunique() == 1:
+    print("UYARI: Veri setinde yalnızca '{}' sınıfı bulundu. Sınıflandırma için yeterli çeşitlilik yok.".format(
+        birim["Basari_Duzeyi"].unique()[0]))
+
+print(birim["Basari_Duzeyi"].value_counts())
+birim.to_csv("birim_basari_siniflandirma_sonuclari.csv", index=False)
+print("Birim:", birim.shape)
+print("BirimRapor:", birimrapor.shape)
+print("PlanVeri:", planveri.shape)
+print("Birleşmiş tablo:", birim.head())
+
+print("\n" + "-"*60)
+print("Birim tablosu (ilk 5 satır):")
+print(birim.head())
+
+print("\n" + "-"*60)
+print("BirimRapor tablosu (ilk 5 satır):")
+print(birimrapor.head())
+
+print("\n" + "-"*60)
+print("PlanVeri tablosu (ilk 5 satır):")
+print(planveri.head())
+
+print("İşlem tamamlandı. Model başarıyla eğitildi ve sonuçlar kaydedildi.")
