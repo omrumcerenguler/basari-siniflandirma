@@ -10,6 +10,7 @@ import pyodbc
 import os
 from dotenv import load_dotenv
 import warnings
+from typing import Any
 warnings.filterwarnings("ignore", category=UserWarning,
                         message=".*pandas only supports SQLAlchemy connectable.*")
 pd.set_option("display.max_columns", None)
@@ -19,7 +20,7 @@ pd.set_option("display.max_columns", None)
 # Veritabanıyla bağlantı kuruluyor
 load_dotenv()
 
-conn = pyodbc.connect(
+conn: Any = pyodbc.connect(
     f"DRIVER={{ODBC Driver 17 for SQL Server}};"
     f"SERVER={os.getenv('DB_SERVER')};"
     f"DATABASE={os.getenv('DB_NAME')};"
@@ -159,7 +160,7 @@ elif len(unique_classes) == 2:
 
     df_minority_up = resample(
         df_minority, replace=True, n_samples=len(df_majority), random_state=42)
-    birim = pd.concat([df_majority, df_minority_up])
+    birim = pd.concat([df_majority, df_minority_up])  # type: ignore[call-overload]
 else:
     # 3 sınıf varsa tüm sınıfları eşitle
     max_count = max(len(df_basarisiz), len(df_basarili), len(df_orta))
@@ -169,7 +170,7 @@ else:
         df_basarili, replace=True, n_samples=max_count, random_state=42)
     df_orta_up = resample(df_orta, replace=True,
                           n_samples=max_count, random_state=42)
-    birim = pd.concat([df_basarisiz_up, df_basarili_up, df_orta_up])
+    birim = pd.concat([df_basarisiz_up, df_basarili_up, df_orta_up])  # type: ignore[call-overload]
 
 # Son halini göster
 print("\n" + "-"*60)
@@ -187,7 +188,7 @@ X = pd.concat([
         "Planlama_Etkinligi", "Rapor_Basina_Hedef", "Ortalama_Hedef_Gerceklesme"
     ]],
     kategorik
-], axis=1)
+], axis=1)  # type: ignore[call-overload]
 # X, modelin girdi verisi; y, modelin tahmin edeceği etiketlerdir.
 y = birim["Basari_Duzeyi"]
 
